@@ -3,14 +3,8 @@ version 1.0
 workflow trekker_sc {
 
     input {
-
-        # Original Trekker samplesheet stored in GCS.
         File input_samplesheet
-
-        # Retained for compatibility with the existing workflow configuration.
         String output_directory
-
-        # Full Docker image URI.
         String docker_registry
 
         Int num_cpu = 16
@@ -18,21 +12,14 @@ workflow trekker_sc {
         Int disk_space = 300
     }
 
-    # Read the complete samplesheet.
     Array[String] all_rows = read_lines(input_samplesheet)
 
-    # Remove the first row, which is the samplesheet header.
-    #
-    # sub(array, start, length)
-    #
-    # Starting at index 1 means the header at index 0 is excluded.
     Array[String] sample_rows = sub(
         all_rows,
         1,
         length(all_rows) - 1
     )
 
-    # Process one sample per task.
     scatter (sample_line in sample_rows) {
 
         call process_sample {
@@ -47,8 +34,7 @@ workflow trekker_sc {
     }
 
     output {
-
-        Array[Directory] trekker_outputs = process_sample.trekker_output
+        Array[File] trekker_outputs = process_sample.trekker_output
     }
 }
 
@@ -56,14 +42,8 @@ workflow trekker_sc {
 task process_sample {
 
     input {
-
-        # One data row from the Trekker samplesheet.
         String line
-
-        # Original samplesheet.
         File input_samplesheet
-
-        # Docker image containing Trekker and the CellBender converter.
         String docker_registry
 
         Int num_cpu
@@ -74,10 +54,6 @@ task process_sample {
     command <<<
         set -euo pipefail
 
-        # ------------------------------------------------------------------
-        # Terra working directories
-        # ------------------------------------------------------------------
-
         MNT_PATH="/mnt/disks/cromwell_root"
         RAW_DIR="${MNT_PATH}/raw"
         OUT_DIR="${MNT_PATH}/out"
@@ -87,20 +63,9 @@ task process_sample {
 
         chmod -R 777 "${MNT_PATH}"
 
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
         # Parse samplesheet row
-        #
-        # Expected columns:
-        #
-        #   1 = sample
-        #   2 = ...
-        #   3 = ...
-        #   4 = barcode_file
-        #   5 = fastq_1
-        #   6 = fastq_2
-        #   7 = sc_outdir
-        #
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
 
         SAMPLE_NAME=$(echo "~{line}" | awk -F',' '{print $1}')
         BARCODE_PATH=$(echo "~{line}" | awk -F',' '{print $4}')
@@ -118,22 +83,17 @@ task process_sample {
         echo "sc_outdir:         ${SC_OUTDIR}"
         echo ""
 
-        # ------------------------------------------------------------------
-        # Localize the original samplesheet.
-        #
-        # Cromwell/Terra already localizes WDL File inputs, so no GCS
-        # download is needed here.
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
+        # Localize samplesheet
+        # --------------------------------------------------------------
 
         LOCAL_SAMPLE_SHEET="${RAW_DIR}/$(basename "~{input_samplesheet}")"
 
         cp "~{input_samplesheet}" "${LOCAL_SAMPLE_SHEET}"
 
-        # ------------------------------------------------------------------
-        # Download FASTQs and barcode/tile input.
-        #
-        # These paths are stored as GCS URIs in the samplesheet.
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
+        # Download FASTQ R1
+        # --------------------------------------------------------------
 
         echo "Downloading FASTQ R1..."
 
@@ -141,11 +101,19 @@ task process_sample {
             "${FASTQR1_PATH}" \
             "${RAW_DIR}/"
 
+        # --------------------------------------------------------------
+        # Download FASTQ R2
+        # --------------------------------------------------------------
+
         echo "Downloading FASTQ R2..."
 
         gcloud storage cp \
             "${FASTQR2_PATH}" \
             "${RAW_DIR}/"
+
+        # --------------------------------------------------------------
+        # Download barcode/tile file
+        # --------------------------------------------------------------
 
         echo "Downloading barcode/tile file..."
 
@@ -164,20 +132,13 @@ task process_sample {
         echo "  Barcode: ${LOCAL_BARCODE}"
         echo ""
 
-        # ------------------------------------------------------------------
-        # Handle CellBender / single-cell input.
-        #
-        # If sc_outdir is an H5 file, treat it as CellBender output and
-        # convert it into a Trekker-compatible 10x Matrix Market directory.
-        #
-        # Otherwise, download the supplied sc_outdir directly.
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
+        # Handle CellBender / single-cell input
+        # --------------------------------------------------------------
 
         if [[ "${SC_OUTDIR}" == *.h5 ]]; then
 
             echo "CellBender H5 input detected."
-
-            echo "Downloading CellBender output..."
 
             gcloud storage cp \
                 "${SC_OUTDIR}" \
@@ -202,8 +163,6 @@ task process_sample {
             echo ""
             echo "CellBender conversion complete."
 
-            echo "Converted matrix contents:"
-
             ls -lh "${CELLBENDER_MATRIX_DIR}"
 
             LOCAL_SC_OUTDIR="${CELLBENDER_MATRIX_DIR}"
@@ -211,8 +170,6 @@ task process_sample {
         else
 
             echo "Non-H5 sc_outdir detected."
-
-            echo "Downloading supplied sc_outdir..."
 
             gcloud storage cp \
                 -r \
@@ -223,14 +180,9 @@ task process_sample {
 
         fi
 
-        # ------------------------------------------------------------------
-        # Create a local Trekker samplesheet.
-        #
-        # Trekker receives local filesystem paths instead of GCS URIs.
-        #
-        # We preserve the original samplesheet and replace the paths for
-        # the sample being processed.
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
+        # Build localized Trekker samplesheet
+        # --------------------------------------------------------------
 
         LOCAL_TREKKER_SAMPLESHEET="${RAW_DIR}/trekker_samplesheet.csv"
 
@@ -243,9 +195,9 @@ task process_sample {
             "${LOCAL_R2}" \
             "${LOCAL_SC_OUTDIR}" \
             <<'PY'
+
 import csv
 import sys
-
 
 (
     input_csv,
@@ -258,10 +210,6 @@ import sys
 ) = sys.argv[1:]
 
 
-# ----------------------------------------------------------------------
-# Read samplesheet
-# ----------------------------------------------------------------------
-
 with open(input_csv, "r", newline="") as infile:
     reader = csv.reader(infile)
     rows = list(reader)
@@ -272,11 +220,6 @@ if not rows:
 
 
 header = rows[0]
-
-
-# ----------------------------------------------------------------------
-# Find required columns
-# ----------------------------------------------------------------------
 
 header_lookup = {
     name.strip(): index
@@ -314,10 +257,6 @@ fastq2_idx = header_lookup["fastq_2"]
 sc_outdir_idx = header_lookup["sc_outdir"]
 
 
-# ----------------------------------------------------------------------
-# Replace paths for the requested sample
-# ----------------------------------------------------------------------
-
 updated_rows = [header]
 
 found_sample = False
@@ -352,10 +291,6 @@ if not found_sample:
     )
 
 
-# ----------------------------------------------------------------------
-# Write localized samplesheet
-# ----------------------------------------------------------------------
-
 with open(output_csv, "w", newline="") as outfile:
 
     writer = csv.writer(outfile)
@@ -366,6 +301,7 @@ with open(output_csv, "w", newline="") as outfile:
 print(
     f"Wrote localized samplesheet: {output_csv}"
 )
+
 PY
 
         echo ""
@@ -377,21 +313,9 @@ PY
 
         echo ""
 
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
         # Run Trekker
-        #
-        # The Trekker script is installed by the Docker image at:
-        #
-        #   /opt/trekker-v1.4.11/nuclei_locater_toplevel.sh
-        #
-        # The modified script should contain:
-        #
-        #   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        #
-        # and:
-        #
-        #   OUT_DIR="/mnt/disks/cromwell_root/out"
-        # ------------------------------------------------------------------
+        # --------------------------------------------------------------
 
         echo "============================================================"
         echo "Starting Trekker"
@@ -410,19 +334,34 @@ PY
 
         find \
             "${OUT_DIR}" \
-            -maxdepth 3 \
             -type f \
             -print
+
+        # --------------------------------------------------------------
+        # Package Trekker output.
+        #
+        # WDL 1.0 does not have a Directory output type, so package the
+        # complete output directory as a tar.gz file.
+        # --------------------------------------------------------------
+
+        cd "${OUT_DIR}"
+
+        tar \
+            -czf \
+            "${MNT_PATH}/${SAMPLE_NAME}_trekker_output.tar.gz" \
+            .
+
+        echo ""
+        echo "Created output archive:"
+        echo "  ${MNT_PATH}/${SAMPLE_NAME}_trekker_output.tar.gz"
 
     >>>
 
     output {
-
-        Directory trekker_output = "/mnt/disks/cromwell_root/out"
+        File trekker_output = "/mnt/disks/cromwell_root/~{SAMPLE_NAME}_trekker_output.tar.gz"
     }
 
     runtime {
-
         docker: docker_registry
 
         cpu: num_cpu
