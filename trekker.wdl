@@ -14,13 +14,11 @@ workflow trekker_sc {
 
     Array[String] all_rows = read_lines(input_samplesheet)
 
-    Array[String] sample_rows = sub(
-        all_rows,
-        1,
-        length(all_rows) - 1
-    )
+    scatter (row_index in range(length(all_rows) - 1)) {
 
-    scatter (sample_line in sample_rows) {
+        Int row_index_plus_one = row_index + 1
+
+        String sample_line = all_rows[row_index_plus_one]
 
         call process_sample {
             input:
