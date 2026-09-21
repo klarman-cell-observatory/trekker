@@ -2,80 +2,50 @@ FROM tbusaspatial/trekker:v1.4.11
 
 WORKDIR /opt
 
-# ----------------------------------------------------------------------
-# Configuration
-# ----------------------------------------------------------------------
-
-ARG TREKKER_REPO=https://github.com/chenebroad/trekker.git
+ARG TREKKER_REPO=https://github.com/klarman-cell-observatory/trekker.git
 ARG TREKKER_BRANCH=main
 
-# ----------------------------------------------------------------------
-# Install git if it is not already available in the Trekker image.
-# ----------------------------------------------------------------------
+# Install system dependencies and Google Cloud CLI
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        git \
+        curl \
+        ca-certificates \
+        apt-transport-https \
+        gnupg && \
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/cloud.google.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+        > /etc/apt/sources.list.d/google-cloud-sdk.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        google-cloud-cli && \
+    rm -rf /var/lib/apt/lists/*
 
-RUN if ! command -v git >/dev/null 2>&1; then \
-        apt-get update && \
-        apt-get install -y --no-install-recommends git && \
-        rm -rf /var/lib/apt/lists/*; \
-    fi
-
-# ----------------------------------------------------------------------
-# Clone the current version of the Terra-specific Trekker code.
-#
-# The repository contains:
-#
-#   trekker-v1.4.11/
-#       nuclei_locater_toplevel.sh
-#
-#   terra/
-#       cellbender_to_10x.py
-#
-# A fresh clone is performed every Docker build.
-# ----------------------------------------------------------------------
-
+# Pull the current Trekker repository
 RUN git clone \
         --depth 1 \
         --branch "${TREKKER_BRANCH}" \
         "${TREKKER_REPO}" \
         /tmp/trekker-repo
 
-# ----------------------------------------------------------------------
-# Install the modified Trekker top-level script.
-#
-# The Trekker base image supplies the Trekker environment/dependencies.
-# The GitHub repository supplies our Terra-specific version of the
-# pipeline entrypoint.
-# ----------------------------------------------------------------------
-
+# Install the Trekker launcher
 RUN mkdir -p /opt/trekker-v1.4.11/terra && \
     cp \
         /tmp/trekker-repo/trekker-v1.4.11/nuclei_locater_toplevel.sh \
         /opt/trekker-v1.4.11/nuclei_locater_toplevel.sh
 
-# ----------------------------------------------------------------------
-# Install the CellBender -> 10x conversion utility.
-# ----------------------------------------------------------------------
-
+# Install CellBender -> 10x conversion utility
 RUN cp \
         /tmp/trekker-repo/terra/cellbender_to_10x.py \
         /opt/trekker-v1.4.11/terra/cellbender_to_10x.py
-
-# ----------------------------------------------------------------------
-# Make the scripts executable.
-# ----------------------------------------------------------------------
 
 RUN chmod +x \
         /opt/trekker-v1.4.11/nuclei_locater_toplevel.sh \
         /opt/trekker-v1.4.11/terra/cellbender_to_10x.py
 
-# ----------------------------------------------------------------------
-# Remove the temporary GitHub checkout.
-# ----------------------------------------------------------------------
-
+# Clean up source repository
 RUN rm -rf /tmp/trekker-repo
-
-# ----------------------------------------------------------------------
-# Trekker working directory.
-# ----------------------------------------------------------------------
 
 WORKDIR /opt/trekker-v1.4.11
