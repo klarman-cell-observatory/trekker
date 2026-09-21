@@ -1,0 +1,8 @@
+version: 1.2
+workflows:
+  - name: trekker-terra
+    subclass: WDL
+    primaryDescriptorPath: /trekker.wdl
+    authors:
+      - name: Eric Chen
+        email: chene@broadinstitute.org
