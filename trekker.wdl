@@ -26,6 +26,7 @@ workflow trekker_sc {
             input:
                 line = sample_line,
                 input_samplesheet = input_samplesheet,
+                output_directory = output_directory,
                 docker_registry = docker_registry,
                 num_cpu = num_cpu,
                 memory = memory,
@@ -44,6 +45,7 @@ task process_sample {
     input {
         String line
         File input_samplesheet
+        String output_directory
         String docker_registry
 
         Int num_cpu
@@ -63,10 +65,6 @@ task process_sample {
 
         chmod -R 777 "${MNT_PATH}"
 
-        # --------------------------------------------------------------
-        # Parse samplesheet row
-        # --------------------------------------------------------------
-
         SAMPLE_NAME=$(echo "~{line}" | awk -F',' '{print $1}')
         BARCODE_PATH=$(echo "~{line}" | awk -F',' '{print $4}')
         FASTQR1_PATH=$(echo "~{line}" | awk -F',' '{print $5}')
@@ -81,42 +79,23 @@ task process_sample {
         echo "FASTQ R1:          ${FASTQR1_PATH}"
         echo "FASTQ R2:          ${FASTQR2_PATH}"
         echo "sc_outdir:         ${SC_OUTDIR}"
+        echo "Output directory:  ~{output_directory}"
         echo ""
 
-        # --------------------------------------------------------------
-        # Localize samplesheet
-        # --------------------------------------------------------------
-
         LOCAL_SAMPLE_SHEET="${RAW_DIR}/$(basename "~{input_samplesheet}")"
-
         cp "~{input_samplesheet}" "${LOCAL_SAMPLE_SHEET}"
 
-        # --------------------------------------------------------------
-        # Download FASTQ R1
-        # --------------------------------------------------------------
-
         echo "Downloading FASTQ R1..."
-
         gcloud storage cp \
             "${FASTQR1_PATH}" \
             "${RAW_DIR}/"
 
-        # --------------------------------------------------------------
-        # Download FASTQ R2
-        # --------------------------------------------------------------
-
         echo "Downloading FASTQ R2..."
-
         gcloud storage cp \
             "${FASTQR2_PATH}" \
             "${RAW_DIR}/"
 
-        # --------------------------------------------------------------
-        # Download barcode/tile file
-        # --------------------------------------------------------------
-
         echo "Downloading barcode/tile file..."
-
         gcloud storage cp \
             "${BARCODE_PATH}" \
             "${RAW_DIR}/"
@@ -132,20 +111,17 @@ task process_sample {
         echo "  Barcode: ${LOCAL_BARCODE}"
         echo ""
 
-        # --------------------------------------------------------------
-        # Handle CellBender / single-cell input
-        # --------------------------------------------------------------
-
         if [[ "${SC_OUTDIR}" == *.h5 ]]; then
 
             echo "CellBender H5 input detected."
+
+            echo "Downloading CellBender output..."
 
             gcloud storage cp \
                 "${SC_OUTDIR}" \
                 "${RAW_DIR}/"
 
             LOCAL_CELLBENDER_H5="${RAW_DIR}/$(basename "${SC_OUTDIR}")"
-
             CELLBENDER_MATRIX_DIR="${RAW_DIR}/cellbender_matrix"
 
             echo ""
@@ -171,6 +147,8 @@ task process_sample {
 
             echo "Non-H5 sc_outdir detected."
 
+            echo "Downloading supplied sc_outdir..."
+
             gcloud storage cp \
                 -r \
                 "${SC_OUTDIR}" \
@@ -179,10 +157,6 @@ task process_sample {
             LOCAL_SC_OUTDIR="${RAW_DIR}/$(basename "${SC_OUTDIR}")"
 
         fi
-
-        # --------------------------------------------------------------
-        # Build localized Trekker samplesheet
-        # --------------------------------------------------------------
 
         LOCAL_TREKKER_SAMPLESHEET="${RAW_DIR}/trekker_samplesheet.csv"
 
@@ -209,15 +183,12 @@ import sys
     sc_outdir,
 ) = sys.argv[1:]
 
-
 with open(input_csv, "r", newline="") as infile:
     reader = csv.reader(infile)
     rows = list(reader)
 
-
 if not rows:
     raise RuntimeError("Samplesheet is empty.")
-
 
 header = rows[0]
 
@@ -225,7 +196,6 @@ header_lookup = {
     name.strip(): index
     for index, name in enumerate(header)
 }
-
 
 required_columns = [
     "sample",
@@ -235,13 +205,11 @@ required_columns = [
     "sc_outdir",
 ]
 
-
 missing = [
     column
     for column in required_columns
     if column not in header_lookup
 ]
-
 
 if missing:
     raise RuntimeError(
@@ -249,18 +217,14 @@ if missing:
         + ", ".join(missing)
     )
 
-
 sample_idx = header_lookup["sample"]
 barcode_idx = header_lookup["barcode_file"]
 fastq1_idx = header_lookup["fastq_1"]
 fastq2_idx = header_lookup["fastq_2"]
 sc_outdir_idx = header_lookup["sc_outdir"]
 
-
 updated_rows = [header]
-
 found_sample = False
-
 
 for row in rows[1:]:
 
@@ -284,19 +248,14 @@ for row in rows[1:]:
 
     updated_rows.append(row)
 
-
 if not found_sample:
     raise RuntimeError(
         f"Could not find sample '{sample_name}' in samplesheet."
     )
 
-
 with open(output_csv, "w", newline="") as outfile:
-
     writer = csv.writer(outfile)
-
     writer.writerows(updated_rows)
-
 
 print(
     f"Wrote localized samplesheet: {output_csv}"
@@ -312,10 +271,6 @@ PY
         cat "${LOCAL_TREKKER_SAMPLESHEET}"
 
         echo ""
-
-        # --------------------------------------------------------------
-        # Run Trekker
-        # --------------------------------------------------------------
 
         echo "============================================================"
         echo "Starting Trekker"
@@ -337,39 +292,44 @@ PY
             -type f \
             -print
 
-        # --------------------------------------------------------------
-        # Package Trekker output.
-        #
-        # WDL 1.0 does not have a Directory output type, so package the
-        # complete output directory as a tar.gz file.
-        # --------------------------------------------------------------
-
         cd "${OUT_DIR}"
 
         tar \
             -czf \
-            "${MNT_PATH}/${SAMPLE_NAME}_trekker_output.tar.gz" \
+            "${MNT_PATH}/trekker_output.tar.gz" \
             .
 
         echo ""
         echo "Created output archive:"
-        echo "  ${MNT_PATH}/${SAMPLE_NAME}_trekker_output.tar.gz"
+        echo "  ${MNT_PATH}/trekker_output.tar.gz"
+
+        DESTINATION="~{output_directory}"
+
+        DESTINATION="${DESTINATION%/}"
+
+        echo ""
+        echo "Uploading Trekker output to:"
+        echo "  ${DESTINATION}/${SAMPLE_NAME}_trekker_output.tar.gz"
+        echo ""
+
+        gcloud storage cp \
+            "${MNT_PATH}/trekker_output.tar.gz" \
+            "${DESTINATION}/${SAMPLE_NAME}_trekker_output.tar.gz"
+
+        echo ""
+        echo "Upload complete."
 
     >>>
 
     output {
-        File trekker_output = "/mnt/disks/cromwell_root/~{SAMPLE_NAME}_trekker_output.tar.gz"
+        File trekker_output = "/mnt/disks/cromwell_root/trekker_output.tar.gz"
     }
 
     runtime {
         docker: docker_registry
-
         cpu: num_cpu
-
         memory: memory
-
         bootDiskSizeGB: 25
-
         disks: "local-disk ${disk_space} HDD"
     }
 }
