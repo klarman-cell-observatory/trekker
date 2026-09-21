@@ -23,29 +23,37 @@ RUN apt-get update && \
         google-cloud-cli && \
     rm -rf /var/lib/apt/lists/*
 
-# Pull the current Trekker repository
+# Download the complete original Trekker v1.4.11 distribution
+RUN wget https://takarabio.com/resourcedocument/x357434 -O - \
+        | tar -xzf -
+
+# Clone our Terra-specific Trekker repository
 RUN git clone \
         --depth 1 \
         --branch "${TREKKER_BRANCH}" \
         "${TREKKER_REPO}" \
         /tmp/trekker-repo
 
-# Install the Trekker launcher
-RUN mkdir -p /opt/trekker-v1.4.11/terra && \
-    cp \
+# Replace the original Trekker launcher with our edited version
+RUN cp \
         /tmp/trekker-repo/trekker-v1.4.11/nuclei_locater_toplevel.sh \
         /opt/trekker-v1.4.11/nuclei_locater_toplevel.sh
 
-# Install CellBender -> 10x conversion utility
-RUN cp \
+# Add the CellBender -> 10x conversion utility
+RUN mkdir -p /opt/trekker-v1.4.11/terra && \
+    cp \
         /tmp/trekker-repo/terra/cellbender_to_10x.py \
         /opt/trekker-v1.4.11/terra/cellbender_to_10x.py
 
+# Ensure the Trekker and Terra scripts are executable
 RUN chmod +x \
         /opt/trekker-v1.4.11/nuclei_locater_toplevel.sh \
+        /opt/trekker-v1.4.11/nuclei_locater_conda.sh \
+        /opt/trekker-v1.4.11/nuclei_locater_docker.sh \
+        /opt/trekker-v1.4.11/nuclei_locater_singularity.sh \
         /opt/trekker-v1.4.11/terra/cellbender_to_10x.py
 
-# Clean up source repository
+# Remove the temporary GitHub checkout
 RUN rm -rf /tmp/trekker-repo
 
 WORKDIR /opt/trekker-v1.4.11
