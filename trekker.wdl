@@ -7,12 +7,10 @@ workflow trekker_sc {
         # Original Trekker samplesheet stored in GCS.
         File input_samplesheet
 
-        # GCS destination used by the workflow/output configuration.
-        # This is retained as a workflow input for compatibility with
-        # the existing workflow configuration.
+        # Retained for compatibility with the existing workflow configuration.
         String output_directory
 
-        # Docker image containing Trekker + CellBender conversion utility.
+        # Full Docker image URI.
         String docker_registry
 
         Int num_cpu = 16
@@ -23,11 +21,19 @@ workflow trekker_sc {
     # Read the complete samplesheet.
     Array[String] all_rows = read_lines(input_samplesheet)
 
-    # The first row is assumed to be the header.
-    # Each remaining row represents one sample.
-    scatter (i in range(length(all_rows) - 1)) {
+    # Remove the first row, which is the samplesheet header.
+    #
+    # sub(array, start, length)
+    #
+    # Starting at index 1 means the header at index 0 is excluded.
+    Array[String] sample_rows = sub(
+        all_rows,
+        1,
+        length(all_rows) - 1
+    )
 
-        String sample_line = all_rows[i + 1]
+    # Process one sample per task.
+    scatter (sample_line in sample_rows) {
 
         call process_sample {
             input:
@@ -42,7 +48,6 @@ workflow trekker_sc {
 
     output {
 
-        # Each sample produces its own Trekker output directory.
         Array[Directory] trekker_outputs = process_sample.trekker_output
     }
 }
@@ -58,7 +63,7 @@ task process_sample {
         # Original samplesheet.
         File input_samplesheet
 
-        # Container image.
+        # Docker image containing Trekker and the CellBender converter.
         String docker_registry
 
         Int num_cpu
@@ -70,7 +75,7 @@ task process_sample {
         set -euo pipefail
 
         # ------------------------------------------------------------------
-        # Working directories
+        # Terra working directories
         # ------------------------------------------------------------------
 
         MNT_PATH="/mnt/disks/cromwell_root"
@@ -90,7 +95,7 @@ task process_sample {
         #   1 = sample
         #   2 = ...
         #   3 = ...
-        #   4 = barcode_file / tile ID
+        #   4 = barcode_file
         #   5 = fastq_1
         #   6 = fastq_2
         #   7 = sc_outdir
@@ -106,6 +111,7 @@ task process_sample {
         echo "============================================================"
         echo "Processing sample: ${SAMPLE_NAME}"
         echo "============================================================"
+
         echo "Barcode/tile path: ${BARCODE_PATH}"
         echo "FASTQ R1:          ${FASTQR1_PATH}"
         echo "FASTQ R2:          ${FASTQR2_PATH}"
@@ -113,10 +119,10 @@ task process_sample {
         echo ""
 
         # ------------------------------------------------------------------
-        # Download input samplesheet
+        # Localize the original samplesheet.
         #
-        # The samplesheet is a WDL File input, so Cromwell localizes it.
-        # Copy it into our predictable working directory.
+        # Cromwell/Terra already localizes WDL File inputs, so no GCS
+        # download is needed here.
         # ------------------------------------------------------------------
 
         LOCAL_SAMPLE_SHEET="${RAW_DIR}/$(basename "~{input_samplesheet}")"
@@ -130,13 +136,22 @@ task process_sample {
         # ------------------------------------------------------------------
 
         echo "Downloading FASTQ R1..."
-        gcloud storage cp "${FASTQR1_PATH}" "${RAW_DIR}/"
+
+        gcloud storage cp \
+            "${FASTQR1_PATH}" \
+            "${RAW_DIR}/"
 
         echo "Downloading FASTQ R2..."
-        gcloud storage cp "${FASTQR2_PATH}" "${RAW_DIR}/"
+
+        gcloud storage cp \
+            "${FASTQR2_PATH}" \
+            "${RAW_DIR}/"
 
         echo "Downloading barcode/tile file..."
-        gcloud storage cp "${BARCODE_PATH}" "${RAW_DIR}/"
+
+        gcloud storage cp \
+            "${BARCODE_PATH}" \
+            "${RAW_DIR}/"
 
         LOCAL_R1="${RAW_DIR}/$(basename "${FASTQR1_PATH}")"
         LOCAL_R2="${RAW_DIR}/$(basename "${FASTQR2_PATH}")"
@@ -150,10 +165,10 @@ task process_sample {
         echo ""
 
         # ------------------------------------------------------------------
-        # CellBender / single-cell input
+        # Handle CellBender / single-cell input.
         #
-        # If sc_outdir points to an H5 file, download the H5 and convert it
-        # to a 10x Matrix Market directory for Trekker.
+        # If sc_outdir is an H5 file, treat it as CellBender output and
+        # convert it into a Trekker-compatible 10x Matrix Market directory.
         #
         # Otherwise, download the supplied sc_outdir directly.
         # ------------------------------------------------------------------
@@ -161,6 +176,7 @@ task process_sample {
         if [[ "${SC_OUTDIR}" == *.h5 ]]; then
 
             echo "CellBender H5 input detected."
+
             echo "Downloading CellBender output..."
 
             gcloud storage cp \
@@ -168,14 +184,15 @@ task process_sample {
                 "${RAW_DIR}/"
 
             LOCAL_CELLBENDER_H5="${RAW_DIR}/$(basename "${SC_OUTDIR}")"
+
             CELLBENDER_MATRIX_DIR="${RAW_DIR}/cellbender_matrix"
 
             echo ""
             echo "CellBender H5:"
             echo "  ${LOCAL_CELLBENDER_H5}"
             echo ""
+
             echo "Converting CellBender H5 to 10x Matrix Market..."
-            echo ""
 
             python3 \
                 /opt/trekker-v1.4.11/terra/cellbender_to_10x.py \
@@ -184,7 +201,9 @@ task process_sample {
 
             echo ""
             echo "CellBender conversion complete."
-            echo "Converted matrix:"
+
+            echo "Converted matrix contents:"
+
             ls -lh "${CELLBENDER_MATRIX_DIR}"
 
             LOCAL_SC_OUTDIR="${CELLBENDER_MATRIX_DIR}"
@@ -192,6 +211,7 @@ task process_sample {
         else
 
             echo "Non-H5 sc_outdir detected."
+
             echo "Downloading supplied sc_outdir..."
 
             gcloud storage cp \
@@ -206,16 +226,10 @@ task process_sample {
         # ------------------------------------------------------------------
         # Create a local Trekker samplesheet.
         #
-        # Trekker should receive local filesystem paths rather than GCS URIs.
+        # Trekker receives local filesystem paths instead of GCS URIs.
         #
-        # We preserve the original header and all columns, replacing:
-        #
-        #   barcode_file
-        #   fastq_1
-        #   fastq_2
-        #   sc_outdir
-        #
-        # with local paths.
+        # We preserve the original samplesheet and replace the paths for
+        # the sample being processed.
         # ------------------------------------------------------------------
 
         LOCAL_TREKKER_SAMPLESHEET="${RAW_DIR}/trekker_samplesheet.csv"
@@ -232,6 +246,7 @@ task process_sample {
 import csv
 import sys
 
+
 (
     input_csv,
     output_csv,
@@ -242,20 +257,32 @@ import sys
     sc_outdir,
 ) = sys.argv[1:]
 
+
+# ----------------------------------------------------------------------
+# Read samplesheet
+# ----------------------------------------------------------------------
+
 with open(input_csv, "r", newline="") as infile:
     reader = csv.reader(infile)
     rows = list(reader)
 
+
 if not rows:
     raise RuntimeError("Samplesheet is empty.")
 
+
 header = rows[0]
 
-# Find columns by header name where possible.
+
+# ----------------------------------------------------------------------
+# Find required columns
+# ----------------------------------------------------------------------
+
 header_lookup = {
     name.strip(): index
     for index, name in enumerate(header)
 }
+
 
 required_columns = [
     "sample",
@@ -265,11 +292,13 @@ required_columns = [
     "sc_outdir",
 ]
 
+
 missing = [
     column
     for column in required_columns
     if column not in header_lookup
 ]
+
 
 if missing:
     raise RuntimeError(
@@ -277,15 +306,22 @@ if missing:
         + ", ".join(missing)
     )
 
+
 sample_idx = header_lookup["sample"]
 barcode_idx = header_lookup["barcode_file"]
 fastq1_idx = header_lookup["fastq_1"]
 fastq2_idx = header_lookup["fastq_2"]
 sc_outdir_idx = header_lookup["sc_outdir"]
 
+
+# ----------------------------------------------------------------------
+# Replace paths for the requested sample
+# ----------------------------------------------------------------------
+
 updated_rows = [header]
 
 found_sample = False
+
 
 for row in rows[1:]:
 
@@ -309,33 +345,52 @@ for row in rows[1:]:
 
     updated_rows.append(row)
 
+
 if not found_sample:
     raise RuntimeError(
         f"Could not find sample '{sample_name}' in samplesheet."
     )
 
+
+# ----------------------------------------------------------------------
+# Write localized samplesheet
+# ----------------------------------------------------------------------
+
 with open(output_csv, "w", newline="") as outfile:
+
     writer = csv.writer(outfile)
+
     writer.writerows(updated_rows)
 
-print(f"Wrote localized samplesheet: {output_csv}")
+
+print(
+    f"Wrote localized samplesheet: {output_csv}"
+)
 PY
 
         echo ""
-        echo "Localized Trekker samplesheet:"
+        echo "============================================================"
+        echo "Localized Trekker samplesheet"
+        echo "============================================================"
+
         cat "${LOCAL_TREKKER_SAMPLESHEET}"
+
         echo ""
 
         # ------------------------------------------------------------------
         # Run Trekker
         #
-        # SCRIPT_DIR inside nuclei_locater_toplevel.sh resolves to:
+        # The Trekker script is installed by the Docker image at:
         #
-        #     /opt/trekker-v1.4.11
+        #   /opt/trekker-v1.4.11/nuclei_locater_toplevel.sh
         #
-        # OUT_DIR inside that script has been edited to:
+        # The modified script should contain:
         #
-        #     /mnt/disks/cromwell_root/out
+        #   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        #
+        # and:
+        #
+        #   OUT_DIR="/mnt/disks/cromwell_root/out"
         # ------------------------------------------------------------------
 
         echo "============================================================"
@@ -352,7 +407,12 @@ PY
         echo "============================================================"
 
         echo "Trekker output:"
-        find "${OUT_DIR}" -maxdepth 3 -type f -print
+
+        find \
+            "${OUT_DIR}" \
+            -maxdepth 3 \
+            -type f \
+            -print
 
     >>>
 
