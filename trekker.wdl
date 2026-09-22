@@ -376,9 +376,7 @@ PY
     >>>
 
     output {
-        Array[File] trekker_output_files = glob(
-            "/mnt/disks/cromwell_root/out/*"
-        )
+        Array[File] trekker_outputs = flatten(process_sample.trekker_output_files)
     }
 
     runtime {
