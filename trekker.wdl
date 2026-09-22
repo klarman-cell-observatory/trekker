@@ -33,7 +33,8 @@ workflow trekker_sc {
     }
 
     output {
-        Array[File] trekker_outputs = process_sample.trekker_output_files
+        Array[File] trekker_outputs =
+            flatten(process_sample.trekker_output_files)
     }
 }
 
@@ -376,7 +377,9 @@ PY
     >>>
 
     output {
-        Array[File] trekker_outputs = flatten(process_sample.trekker_output_files)
+        Array[File] trekker_output_files = glob(
+            "/mnt/disks/cromwell_root/out/*"
+        )
     }
 
     runtime {
