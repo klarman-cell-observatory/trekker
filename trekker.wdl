@@ -289,9 +289,96 @@ PY
         echo "Starting Trekker"
         echo "============================================================"
 
+        set +e
+
         bash \
             /opt/trekker-v1.4.11/nuclei_locater_toplevel.sh \
             "${LOCAL_TREKKER_SAMPLESHEET}"
+
+        TREKKER_EXIT=$?
+
+        set -e
+
+        echo ""
+        echo "============================================================"
+        echo "Trekker process exited"
+        echo "============================================================"
+
+        echo "Trekker exit code: ${TREKKER_EXIT}"
+
+        ANALYSIS_LOG="${RAW_DIR}/log/${SAMPLE_NAME}/analysis.log"
+        LOCAL_ANALYSIS_LOG="${OUT_DIR}/${SAMPLE_NAME}_analysis.log"
+
+        echo ""
+        echo "============================================================"
+        echo "Preserving Trekker analysis log"
+        echo "============================================================"
+
+        echo "Expected analysis log:"
+        echo "  ${ANALYSIS_LOG}"
+
+        if [[ -f "${ANALYSIS_LOG}" ]]; then
+
+            echo "Analysis log found."
+
+            cp \
+                "${ANALYSIS_LOG}" \
+                "${LOCAL_ANALYSIS_LOG}"
+
+            echo "Copied analysis log to:"
+            echo "  ${LOCAL_ANALYSIS_LOG}"
+
+            DESTINATION="~{output_directory}"
+            DESTINATION="${DESTINATION%/}"
+
+            ANALYSIS_LOG_DESTINATION="${DESTINATION}/${SAMPLE_NAME}/${SAMPLE_NAME}_analysis.log"
+
+            echo ""
+            echo "Uploading analysis log to:"
+            echo "  ${ANALYSIS_LOG_DESTINATION}"
+
+            gcloud storage cp \
+                "${LOCAL_ANALYSIS_LOG}" \
+                "${ANALYSIS_LOG_DESTINATION}"
+
+            echo ""
+            echo "Analysis log upload complete."
+
+        else
+
+            echo "WARNING: Trekker analysis.log was not found."
+
+            echo "Contents of raw/log:"
+            if [[ -d "${RAW_DIR}/log" ]]; then
+                find \
+                    "${RAW_DIR}/log" \
+                    -maxdepth 4 \
+                    -print
+            else
+                echo "No ${RAW_DIR}/log directory exists."
+            fi
+
+        fi
+
+        echo ""
+
+        if [[ "${TREKKER_EXIT}" -ne 0 ]]; then
+
+            echo "============================================================"
+            echo "Trekker failed"
+            echo "============================================================"
+
+            echo "Trekker exit code: ${TREKKER_EXIT}"
+
+            if [[ -f "${LOCAL_ANALYSIS_LOG}" ]]; then
+                echo ""
+                echo "The Trekker analysis log was successfully preserved at:"
+                echo "  ${LOCAL_ANALYSIS_LOG}"
+            fi
+
+            exit "${TREKKER_EXIT}"
+
+        fi
 
         echo ""
         echo "============================================================"
