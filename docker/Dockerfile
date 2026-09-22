@@ -39,6 +39,11 @@ RUN cp \
         /tmp/trekker-repo/trekker-v1.4.11/nuclei_locater_toplevel.sh \
         /opt/trekker-v1.4.11/nuclei_locater_toplevel.sh
 
+
+# Replace the original Trekker conda script with our edited version
+RUN cp \
+        /tmp/trekker-repo/trekker-v1.4.11/nuclei_locater_conda.sh \
+        /opt/trekker-v1.4.11/nuclei_locater_conda.sh
 # Add the CellBender -> 10x conversion utility
 RUN mkdir -p /opt/trekker-v1.4.11/terra && \
     cp \
