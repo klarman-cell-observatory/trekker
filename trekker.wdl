@@ -33,7 +33,7 @@ workflow trekker_sc {
     }
 
     output {
-        Array[File] trekker_outputs = process_sample.trekker_output
+        Array[File] trekker_outputs = process_sample.trekker_output_files
     }
 }
 
@@ -78,6 +78,20 @@ task process_sample {
         echo "FASTQ R2:          ${FASTQR2_PATH}"
         echo "sc_outdir:         ${SC_OUTDIR}"
         echo "Output directory:  ~{output_directory}"
+        echo ""
+
+        echo "============================================================"
+        echo "Container diagnostics"
+        echo "============================================================"
+
+        echo "PATH=${PATH}"
+
+        echo "gcloud location:"
+        which gcloud || true
+
+        echo "gcloud version:"
+        gcloud --version
+
         echo ""
 
         LOCAL_SAMPLE_SHEET="${RAW_DIR}/$(basename "~{input_samplesheet}")"
@@ -283,44 +297,88 @@ PY
         echo "Trekker complete"
         echo "============================================================"
 
-        echo "Trekker output:"
+        echo "Trekker output directory:"
+        echo "  ${OUT_DIR}"
+        echo ""
+
+        echo "Trekker output files:"
 
         find \
             "${OUT_DIR}" \
             -type f \
             -print
 
-        cd "${OUT_DIR}"
+        echo ""
 
-        tar \
-            -czf \
-            "${MNT_PATH}/trekker_output.tar.gz" \
-            .
+        OUTPUT_FILE_COUNT=$(find \
+            "${OUT_DIR}" \
+            -type f \
+            | wc -l)
+
+        echo "Trekker output file count: ${OUTPUT_FILE_COUNT}"
+
+        if [[ "${OUTPUT_FILE_COUNT}" -eq 0 ]]; then
+            echo ""
+            echo "ERROR: Trekker completed but produced no output files."
+            echo ""
+            echo "Contents of output directory:"
+            find \
+                "${OUT_DIR}" \
+                -print
+            exit 1
+        fi
 
         echo ""
-        echo "Created output archive:"
-        echo "  ${MNT_PATH}/trekker_output.tar.gz"
+        echo "Trekker produced ${OUTPUT_FILE_COUNT} output file(s)."
+        echo ""
 
         DESTINATION="~{output_directory}"
-
         DESTINATION="${DESTINATION%/}"
 
-        echo ""
-        echo "Uploading Trekker output to:"
-        echo "  ${DESTINATION}/${SAMPLE_NAME}_trekker_output.tar.gz"
+        SAMPLE_DESTINATION="${DESTINATION}/${SAMPLE_NAME}"
+
+        echo "============================================================"
+        echo "Uploading Trekker outputs"
+        echo "============================================================"
+
+        echo "Destination:"
+        echo "  ${SAMPLE_DESTINATION}"
         echo ""
 
-        gcloud storage cp \
-            "${MNT_PATH}/trekker_output.tar.gz" \
-            "${DESTINATION}/${SAMPLE_NAME}_trekker_output.tar.gz"
+        while IFS= read -r FILE; do
+
+            RELATIVE_PATH="${FILE#${OUT_DIR}/}"
+
+            DESTINATION_FILE="${SAMPLE_DESTINATION}/${RELATIVE_PATH}"
+
+            echo "Uploading:"
+            echo "  ${FILE}"
+            echo "To:"
+            echo "  ${DESTINATION_FILE}"
+            echo ""
+
+            gcloud storage cp \
+                "${FILE}" \
+                "${DESTINATION_FILE}"
+
+        done < <(
+            find \
+                "${OUT_DIR}" \
+                -type f \
+                -print
+        )
 
         echo ""
-        echo "Upload complete."
+        echo "============================================================"
+        echo "Trekker output upload complete"
+        echo "============================================================"
 
     >>>
 
     output {
-        File trekker_output = "/mnt/disks/cromwell_root/trekker_output.tar.gz"
+        Array[File] trekker_output_files = glob(
+            "/mnt/disks/cromwell_root/out/*"
+        )
     }
 
     runtime {
