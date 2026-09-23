@@ -183,7 +183,7 @@ def main():
     feature_path = os.path.join(output_dir, "features.tsv.gz")
 
     print(f"Writing: {feature_path}")
-ß
+
     with gzip.open(
         feature_path,
         "wt",
