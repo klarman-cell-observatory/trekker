@@ -257,9 +257,9 @@ for row in rows[1:]:
         row[fastq2_idx] = fastq2_path
         row[sc_outdir_idx] = sc_outdir
 
+        updated_rows.append(row)
         found_sample = True
-
-    updated_rows.append(row)
+        break
 
 if not found_sample:
     raise RuntimeError(
